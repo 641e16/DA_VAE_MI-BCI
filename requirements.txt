@@ -1,0 +1,9 @@
+torch
+moabb
+geomstats
+pyriemann
+mne
+seaborn
+numpy
+scikit-learn
+braindecode
