@@ -35,6 +35,47 @@ def initialize_weights(m):
         if m.bias is not None: # for batch normalization
             nn.init.zeros_(m.bias) # set bias to zero
 
+def wrapped_normal_sampling(model, n_samples_per_class, class_data, device='cuda', scale_factor=0.01):
+    """
+    Generate samples by following geodesics on the SPD manifold based on the explanation in the paper:
+    "Data augmentation with variational autoencoders and manifold sampling"
+    """
+    model.eval()
+    synthetic_data = []
+    synthetic_labels = []
+    torch.manual_seed(11082003) # depending on seed works better/worse
+    
+    with torch.no_grad():
+        # for each class
+        for class_label, data in enumerate(class_data):
+            # generate n samples for this particular class
+            for i in range(n_samples_per_class):
+                # first get a random real sample as reference point
+                idx = torch.randint(0, len(data), (1,))
+                real_sample = data[idx].to(device)
+                
+                # convert SPD matrix to tangent space using log map directly -> skips the encoder step and works directly on the manifold
+                tangent_vector = model.to_tangent_space(real_sample)
+                
+                # sample a direction in tangent space (must be symmetric for SPD)
+                v_m = model.unvectorize(tangent_vector)
+                noise = torch.randn_like(v_m)
+                noise = 0.5 * (noise + noise.transpose(-1, -2))  # ensure symmetry!!
+                
+                # scale the noise
+                scaled_noise = noise * scale_factor
+                
+                # add to tangent vector and map back to SPD manifold
+                perturbed_tangent = v_m + scaled_noise
+                perturbed_tangent_vec = model.vectorize(perturbed_tangent)
+                
+                # map back to SPD manifold using exp map directly
+                synthetic = model.from_tangent_space(perturbed_tangent_vec)
+                synthetic_data.append(synthetic)
+                synthetic_labels.append(class_label)
+    
+    return torch.cat(synthetic_data, dim=0), torch.tensor(synthetic_labels, device=device)
+
 
 class ImprovedRiemannianVAE(nn.Module):
     def __init__(self, n_channels, latent_dim, seed=11):
@@ -189,7 +230,7 @@ class ImprovedRiemannianVAE(nn.Module):
     def reparameterize(self, mu, logvar):
         """Reparameterization trick for sampling"""
         if self.training:
-            std = torch.exp(0.005 * logvar)  # compute standard deviation
+            std = torch.exp(0.005 * logvar) # compute standard deviation
             eps = torch.randn_like(std)  # random normal noise
             return mu + eps * std  # sample from distribution
         return mu  # just return mean during inference

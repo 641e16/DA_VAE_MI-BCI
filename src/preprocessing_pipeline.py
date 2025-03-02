@@ -21,12 +21,13 @@ from sklearn.base import BaseEstimator, TransformerMixin # Custom transformer
 import matplotlib.pyplot as plt
 from numpy.linalg import eigvalsh
 from regular_VAE import BasicVAE
-from trial_2_vae import ImprovedRiemannianVAE, train_improved_rvae, safe_distance_riemann
+from trial_2_vae import ImprovedRiemannianVAE, train_improved_rvae, safe_distance_riemann, wrapped_normal_sampling
 from sklearn.manifold import TSNE
 import seaborn as sns
 from enum import Enum
 from torch.utils.data import DataLoader, TensorDataset
 import pandas as pd
+
 
 
 class VAEType(Enum):
@@ -460,7 +461,7 @@ def evaluate_with_cv(X_cov, y_numeric, device, n_splits=5, seed=11):
             model=model,
             X_orig=torch.tensor(X_train_no_aug, dtype=torch.float32).to(device),
             y_orig=torch.tensor(y_train, dtype=torch.long).to(device),
-            n_samples_per_class=500,
+            n_samples_per_class=1000,
             latent_dim=16,
             device=device,
             seed=seed
@@ -530,14 +531,21 @@ def evaluate_with_fixed_vae(X_cov, y_numeric, device, n_splits=5, seed=11):
         acc_no_aug_list.append(acc_no_aug)
         
         # with augmentation
-        synthetic_data, synthetic_labels = generate_synthetic_data_per_class(
+                # Convert to tensors
+        X_train_tensor = torch.tensor(X_train, dtype=torch.float32).to(device)
+        y_train_tensor = torch.tensor(y_train, dtype=torch.long).to(device)
+        
+        # Split training data by class (repeated for now)
+        X_class_0 = X_train_tensor[y_train_tensor == 0]
+        X_class_1 = X_train_tensor[y_train_tensor == 1]
+        
+        # generate synthetic training data only
+        synthetic_data, synthetic_labels = wrapped_normal_sampling(
             model=model,
-            X_orig=torch.tensor(X_train, dtype=torch.float32).to(device),
-            y_orig=torch.tensor(y_train, dtype=torch.long).to(device),
             n_samples_per_class=500,
-            latent_dim=16,
+            class_data=[X_class_0, X_class_1],
             device=device,
-            seed=seed
+            scale_factor=0.01
         )
         
         X_train_aug = np.concatenate([X_train, synthetic_data.cpu().numpy()])
@@ -586,15 +594,21 @@ def evaluate_with_fixed_vae(X_cov, y_numeric, device, n_splits=5, seed=11):
         y_train = y_numeric[train_idx]
         y_test = y_numeric[test_idx]
         
+        # Convert to tensors
+        X_train_tensor = torch.tensor(X_train, dtype=torch.float32).to(device)
+        y_train_tensor = torch.tensor(y_train, dtype=torch.long).to(device)
+        
+        # Split training data by class (repeated for now)
+        X_class_0 = X_train_tensor[y_train_tensor == 0]
+        X_class_1 = X_train_tensor[y_train_tensor == 1]
+        
         # generate synthetic training data only
-        synthetic_data, synthetic_labels = generate_synthetic_data_per_class(
+        synthetic_data, synthetic_labels = wrapped_normal_sampling(
             model=model,
-            X_orig=torch.tensor(X_train, dtype=torch.float32).to(device),
-            y_orig=torch.tensor(y_train, dtype=torch.long).to(device),
             n_samples_per_class=2000,
-            latent_dim=16,
+            class_data=[X_class_0, X_class_1],
             device=device,
-            seed=seed
+            scale_factor=0.01
         )
         
         # train classifier on synthetic data only
@@ -608,7 +622,7 @@ def evaluate_with_fixed_vae(X_cov, y_numeric, device, n_splits=5, seed=11):
         print(f"Fold {fold+1} Synthetic-only Accuracy: {acc_synthetic:.3f}")
     
     print("\n=== Final Results ===")
-    print(f"Synthetic-only: {np.mean(acc_synthetic_list):.3f} ± {np.std(acc_synthetic_list):.3f}")
+    print(f"(Wrapped Normal Sampling) Synthetic-only: {np.mean(acc_synthetic_list):.3f} ± {np.std(acc_synthetic_list):.3f}")
 
     return acc_no_aug_list, acc_aug_list, acc_synthetic_list
 
